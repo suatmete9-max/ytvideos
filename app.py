@@ -5,7 +5,7 @@ if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 import aiosqlite
 from database import init_db, add_task, DB_FILE
 from worker import start_workers
@@ -30,7 +30,7 @@ async def dashboard():
         cursor_active = await db.execute("SELECT id, url, proxy, used_proxy, watch_seconds, repeat_count, current_repeat, elapsed_seconds, total_duration, status FROM tasks WHERE status IN ('QUEUED', 'RUNNING') ORDER BY id DESC")
         active_tasks = await cursor_active.fetchall()
         
-        cursor_history = await db.execute("SELECT id, url, proxy, used_proxy, watch_seconds, repeat_count, current_repeat, status FROM tasks WHERE status IN ('SUCCESS', 'FAILED') ORDER BY id DESC LIMIT 30")
+        cursor_history = await db.execute("SELECT id, url, used_proxy, watch_seconds, repeat_count, current_repeat, status FROM tasks WHERE status IN ('SUCCESS', 'FAILED') ORDER BY id DESC LIMIT 50")
         history_tasks = await cursor_history.fetchall()
         
         cursor_logs = await db.execute("SELECT message, timestamp FROM logs ORDER BY id DESC LIMIT 25")
@@ -39,21 +39,22 @@ async def dashboard():
     active_html = ""
     for t in active_tasks:
         task_id, url, proxy, used_proxy, watch_sec, repeat_cnt, cur_rep, elapsed, total, status = t
-        proxy_display = used_proxy if used_proxy else (proxy if proxy else "Auto Rotating Foreign Proxy")
+        proxy_display = used_proxy if used_proxy else "Assigning Clean Proxy..."
         
         if status == 'RUNNING' and total > 0:
-            progress_str = f"{format_time(elapsed)} / {format_time(total)} ({int((elapsed/total)*100)}% Done)"
+            percent = int((elapsed / total) * 100)
+            progress_str = f"{format_time(elapsed)} / {format_time(total)} ({percent}% Done)"
         else:
-            progress_str = "Processing..."
+            progress_str = "Initializing..."
 
         active_html += f"<tr><td>{task_id}</td><td style='word-break: break-all;'>{url}</td><td>{proxy_display}</td><td><b>{progress_str}</b></td><td>{cur_rep}/{'Infinite' if repeat_cnt<=0 else repeat_cnt}</td><td><b style='color: #007bff;'>{status}</b></td></tr>"
 
     if not active_html:
         active_html = "<tr><td colspan='6' style='text-align: center; color: #777;'>No active tasks running right now. Add links above!</td></tr>"
 
-    history_html = "".join([f"<tr><td>{t[0]}</td><td style='word-break: break-all;'>{t[1]}</td><td>{t[3] if t[3] else 'Auto Proxy'}</td><td>{'Full Video' if t[4]<=0 else str(t[4]) + 's'}</td><td>{t[6]}/{'Infinite' if t[5]<=0 else t[5]}</td><td><b style='color: {'#28a745' if t[7]=='SUCCESS' else '#dc3545'};'>{t[7]}</b></td></tr>" for t in history_tasks])
+    history_html = "".join([f"<tr><td>{t[0]}</td><td style='word-break: break-all;'>{t[1]}</td><td>{t[2] if t[2] else 'Auto Proxy'}</td><td>{'Full Video' if t[3]<=0 else str(t[3]) + 's'}</td><td>{t[5]}/{'Infinite' if t[4]<=0 else t[4]}</td><td><b style='color: {'#28a745' if t[6]=='SUCCESS' else '#dc3545'};'>{t[6]}</b></td></tr>" for t in history_tasks])
     if not history_html:
-        history_html = "<tr><td colspan='6' style='text-align: center; color: #777;'>No history records yet.</td></tr>"
+        history_html = "<tr><td colspan='6' style='text-align: center; color: #777;'>No history records yet. Completed tasks will stay here.</td></tr>"
 
     logs_html = "".join([f"<li>[{l[1]}] {l[0]}</li>" for l in logs])
 
@@ -87,7 +88,7 @@ async def dashboard():
             <div class="top-bar">
                 <div>
                     <h1>Cloud Automation Dashboard</h1>
-                    <p style="margin: 5px 0 0 0; font-size: 13px; color: #666;">Multi-Tab Instant Multiplier | Real Proxy Rotation</p>
+                    <p style="margin: 5px 0 0 0; font-size: 13px; color: #666;">Multi-Tab Instant Multiplier | Real Proxy & Device Rotation</p>
                 </div>
                 <button class="refresh-btn" onclick="window.location.reload();">🔄 Refresh Page</button>
             </div>
@@ -99,7 +100,7 @@ async def dashboard():
                         <input type="text" name="url" placeholder="https://youtu.be/..." required>
                     </div>
                     <div class="field-group">
-                        <label>📑 Number of Tabs / Instances (Kitne tabs ek sath khulne chahiye):</label>
+                        <label>📑 Number of Tabs / Instances:</label>
                         <input type="number" name="tab_count" value="1" min="1" max="100">
                     </div>
                     <div class="field-group">
@@ -120,11 +121,11 @@ async def dashboard():
 
             <h2>⚡ Live Active Tasks & Progress</h2>
             <table>
-                <tr><th>ID</th><th>URL</th><th>Proxy IP / Country</th><th>Watch Progress</th><th>Loops</th><th>Status</th></tr>
+                <tr><th>ID</th><th>URL</th><th>Proxy IP & Device</th><th>Watch Progress</th><th>Loops</th><th>Status</th></tr>
                 {active_html}
             </table>
 
-            <h2>📜 Completed Task History</h2>
+            <h2>📜 Completed Task History (Saved Permanently)</h2>
             <table>
                 <tr><th>ID</th><th>URL</th><th>Proxy Used</th><th>Duration</th><th>Loops</th><th>Status</th></tr>
                 {history_html}
@@ -136,12 +137,16 @@ async def dashboard():
     </html>
     """
 
+@app.get("/add-task")
+async def get_add_task():
+    return RedirectResponse(url="/", status_code=303)
+
 @app.post("/add-task")
 async def create_task(url: str = Form(...), proxy: str = Form(None), watch_seconds: int = Form(0), repeat_count: int = Form(1), tab_count: int = Form(1)):
     clean_proxy = proxy.strip() if proxy and proxy.strip() else None
     for _ in range(max(1, tab_count)):
         await add_task(url, clean_proxy, watch_seconds, repeat_count)
-    return HTMLResponse("<script>window.location='/';</script>")
+    return RedirectResponse(url="/", status_code=303)
 
 if __name__ == "__main__":
     import uvicorn
