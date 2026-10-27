@@ -24,7 +24,6 @@ PROXY_SOURCES = [
 
 async def verify_clean_proxy(session, proxy):
     try:
-        # Google ya YouTube par test karke check karenge ki proxy clean hai ya blacklisted/blocked
         async with session.get("https://www.youtube.com", proxy=proxy, timeout=3) as resp:
             if resp.status == 200:
                 return proxy
@@ -50,7 +49,6 @@ async def fetch_and_verify_proxies():
     raw_proxies = list(set(raw_proxies))
     random.shuffle(raw_proxies)
     
-    # Strict filtering: Sirf non-blacklisted aur fully working clean proxies select hongi
     clean_working_proxies = []
     async with aiohttp.ClientSession() as session:
         tasks = [verify_clean_proxy(session, p) for p in raw_proxies[:50]]
@@ -64,7 +62,7 @@ async def fetch_and_verify_proxies():
             "http://51.158.118.72:8811"
         ]
     
-    await add_log(f"[Proxy Engine] Filtered & Loaded {len(clean_working_proxies)} Clean Non-Blacklisted IPs.")
+    await add_log(f"[Proxy Engine] Loaded {len(clean_working_proxies)} Clean Working IPs.")
     return clean_working_proxies
 
 DEVICE_PROFILES = [
@@ -105,8 +103,11 @@ async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_
             active_proxy = custom_proxy if custom_proxy else random.choice(foreign_proxies)
             device = random.choice(DEVICE_PROFILES)
             
+            proxy_with_device = f"{active_proxy} ({device['name']})"
+            await update_task_status(task_id, "RUNNING", current_repeat, proxy_with_device)
+
             loop_display = "Infinite" if repeat_count <= 0 else f"{current_repeat+1}/{repeat_count}"
-            await add_log(f"Task {task_id} (Loop {loop_display}) -> Device: [{device['name']}] | Clean Proxy: {active_proxy}")
+            await add_log(f"Task {task_id} (Loop {loop_display}) -> Device: [{device['name']}] | Proxy: {active_proxy}")
 
             context = None
             try:
@@ -128,7 +129,8 @@ async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_
                     await context.close()
                     context = await browser.new_context(user_agent=device["user_agent"], viewport=device["viewport"])
                     page = await context.new_page()
-                    active_proxy = "Direct IP (Smart Fallback)"
+                    proxy_with_device = f"Direct IP (Fallback) ({device['name']})"
+                    await update_task_status(task_id, "RUNNING", current_repeat, proxy_with_device)
                     await page.goto(url, timeout=18000, wait_until="domcontentloaded")
 
                 try:
@@ -154,7 +156,7 @@ async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_
                     await update_task_progress(task_id, elapsed, actual_duration)
 
                 current_repeat += 1
-                await update_task_status(task_id, "RUNNING", current_repeat, f"{active_proxy} ({device['name']})")
+                await update_task_status(task_id, "RUNNING", current_repeat, proxy_with_device)
 
             except Exception as loop_err:
                 await add_log(f"Task {task_id} error: {str(loop_err)}")
