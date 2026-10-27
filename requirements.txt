@@ -4,3 +4,4 @@ playwright
 aiosqlite
 aiohttp
 python-dotenv
+python-multipart
