@@ -10,14 +10,20 @@ import aiosqlite
 from database import init_db, add_task, DB_FILE
 from worker import start_workers
 import os
+import threading
 
 app = FastAPI()
+
+def run_worker_in_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(start_workers())
 
 @app.on_event("startup")
 async def startup_event():
     await init_db()
-    loop = asyncio.get_event_loop()
-    loop.create_task(start_workers())
+    t = threading.Thread(target=run_worker_in_thread, daemon=True)
+    t.start()
 
 def format_time(seconds):
     m = seconds // 60
@@ -39,7 +45,7 @@ async def dashboard():
     active_html = ""
     for t in active_tasks:
         task_id, url, proxy, used_proxy, watch_sec, repeat_cnt, cur_rep, elapsed, total, status = t
-        proxy_display = used_proxy if used_proxy else "Running Proxy..."
+        proxy_display = used_proxy if used_proxy else "Initializing..."
         
         if status == 'RUNNING' and total > 0:
             percent = int((elapsed / total) * 100)
@@ -52,9 +58,9 @@ async def dashboard():
     if not active_html:
         active_html = "<tr><td colspan='6' style='text-align: center; color: #777;'>No active tasks running right now. Add links above!</td></tr>"
 
-    history_html = "".join([f"<tr><td>{t[0]}</td><td style='word-break: break-all;'>{t[1]}</td><td>{t[2] if t[2] else 'Auto Proxy'}</td><td>{'Full Video' if t[3]<=0 else str(t[3]) + 's'}</td><td>{t[5]}/{'Infinite' if t[4]<=0 else t[4]}</td><td><b style='color: {'#28a745' if t[6]=='SUCCESS' else '#dc3545'};'>{t[6]}</b></td></tr>" for t in history_tasks])
+    history_html = "".join([f"<tr><td>{t[0]}</td><td style='word-break: break-all;'>{t[1]}</td><td>{t[2] if t[2] else 'Proxy Used'}</td><td>{'Full Video' if t[3]<=0 else str(t[3]) + 's'}</td><td>{t[5]}/{'Infinite' if t[4]<=0 else t[4]}</td><td><b style='color: {'#28a745' if t[6]=='SUCCESS' else '#dc3545'};'>{t[6]}</b></td></tr>" for t in history_tasks])
     if not history_html:
-        history_html = "<tr><td colspan='6' style='text-align: center; color: #777;'>No history records yet. Completed tasks will stay here.</td></tr>"
+        history_html = "<tr><td colspan='6' style='text-align: center; color: #777;'>No history records yet. Completed tasks stay here permanently.</td></tr>"
 
     logs_html = "".join([f"<li>[{l[1]}] {l[0]}</li>" for l in logs])
 
