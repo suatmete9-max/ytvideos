@@ -39,13 +39,13 @@ async def dashboard():
     active_html = ""
     for t in active_tasks:
         task_id, url, proxy, used_proxy, watch_sec, repeat_cnt, cur_rep, elapsed, total, status = t
-        proxy_display = used_proxy if used_proxy else "Assigning Clean Proxy..."
+        proxy_display = used_proxy if used_proxy else "Running Proxy..."
         
         if status == 'RUNNING' and total > 0:
             percent = int((elapsed / total) * 100)
             progress_str = f"{format_time(elapsed)} / {format_time(total)} ({percent}% Done)"
         else:
-            progress_str = "Initializing..."
+            progress_str = "Starting..."
 
         active_html += f"<tr><td>{task_id}</td><td style='word-break: break-all;'>{url}</td><td>{proxy_display}</td><td><b>{progress_str}</b></td><td>{cur_rep}/{'Infinite' if repeat_cnt<=0 else repeat_cnt}</td><td><b style='color: #007bff;'>{status}</b></td></tr>"
 
