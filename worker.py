@@ -13,7 +13,7 @@ import aiosqlite
 
 load_dotenv()
 
-DEFAULT_PROXIES = [
+SAFE_PROXIES = [
     "http://20.205.61.155:80",
     "http://185.199.229.156:7492",
     "http://51.158.118.72:8811"
@@ -29,6 +29,11 @@ DEVICE_PROFILES = [
         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
         "viewport": {"width": 390, "height": 844},
         "name": "iPhone 15"
+    },
+    {
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
+        "viewport": {"width": 1280, "height": 800},
+        "name": "MacBook"
     }
 ]
 
@@ -52,7 +57,7 @@ async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_
             active_proxy = custom_proxy if custom_proxy else random.choice(foreign_proxies)
             device = random.choice(DEVICE_PROFILES)
             
-            proxy_with_device = f"{active_proxy} ({device['name']})"
+            proxy_with_device = f"{active_proxy.split('//')[-1]} [{device['name']}]"
             await update_task_status(task_id, "RUNNING", current_repeat, proxy_with_device)
 
             context = None
@@ -67,6 +72,7 @@ async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_
                 context = await browser.new_context(**context_options)
                 page = await context.new_page()
 
+                # Block heavy assets to save memory and speed up loading
                 await page.route("**/*.{png,jpg,jpeg,gif,svg,css,font,woff,woff2}", lambda route: route.abort())
 
                 try:
@@ -75,26 +81,29 @@ async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_
                     await context.close()
                     context = await browser.new_context(user_agent=device["user_agent"], viewport=device["viewport"])
                     page = await context.new_page()
-                    proxy_with_device = f"Direct IP ({device['name']})"
+                    proxy_with_device = f"Direct IP [{device['name']}]"
                     await update_task_status(task_id, "RUNNING", current_repeat, proxy_with_device)
                     await page.goto(url, timeout=18000, wait_until="domcontentloaded")
 
+                # Try skipping ads if present
                 try:
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(1)
                     skip_btn = page.locator(".ytp-ad-skip-button, button:has-text('Skip Ad')")
                     if await skip_btn.count() > 0:
-                        await skip_btn.first.click(timeout=1500)
+                        await skip_btn.first.click(timeout=1000)
                 except:
                     pass
                 
+                # Determine watch duration
                 actual_duration = watch_seconds
                 if watch_seconds <= 0:
                     try:
-                        dur = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.duration : 45; }")
-                        actual_duration = int(dur) if dur and dur > 0 else 45
+                        dur = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.duration : 30; }")
+                        actual_duration = int(dur) if dur and dur > 0 else 30
                     except:
-                        actual_duration = 45
+                        actual_duration = 30
 
+                # Live timer progress loop
                 elapsed = 0
                 while elapsed < actual_duration:
                     await asyncio.sleep(1)
@@ -133,7 +142,7 @@ async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_
 
 async def start_workers():
     await init_db()
-    await add_log("Worker engine started successfully. Ready to process tasks.")
+    await add_log("Worker engine active & ready.")
     
     while True:
         try:
@@ -148,11 +157,11 @@ async def start_workers():
                         await db.execute("UPDATE tasks SET status = 'RUNNING', attempts = attempts + 1 WHERE id = ?", (task_id,))
                         await db.commit()
                     
-                    asyncio.create_task(execute_single_task(task_id, url, proxy, watch_seconds, repeat_count, current_repeat, max_retries, DEFAULT_PROXIES))
+                    asyncio.create_task(execute_single_task(task_id, url, proxy, watch_seconds, repeat_count, current_repeat, max_retries, SAFE_PROXIES))
             
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
         except Exception as e:
-            await add_log(f"Manager loop error: {str(e)}")
+            await add_log(f"Manager error: {str(e)}")
             await asyncio.sleep(2)
 
 if __name__ == "__main__":
