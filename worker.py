@@ -51,7 +51,7 @@ async def fetch_and_verify_proxies():
     
     clean_working_proxies = []
     async with aiohttp.ClientSession() as session:
-        tasks = [verify_clean_proxy(session, p) for p in raw_proxies[:50]]
+        tasks = [verify_clean_proxy(session, p) for p in raw_proxies[:30]] # Reduced pool to save memory
         results = await asyncio.gather(*tasks)
         clean_working_proxies = [r for r in results if r is not None]
 
@@ -72,118 +72,126 @@ DEVICE_PROFILES = [
         "name": "Windows PC (Chrome)"
     },
     {
-        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
-        "viewport": {"width": 1280, "height": 800},
-        "name": "Apple MacBook"
-    },
-    {
         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
         "viewport": {"width": 390, "height": 844},
         "name": "Apple iPhone 15"
     }
 ]
 
+# Semaphore lagakar ek sath maximum tasks restrict kar diye hain taaki RAM overflow na ho
+TASK_SEMAPHORE = asyncio.Semaphore(2)
+
 async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_count, current_repeat, max_retries, foreign_proxies):
-    async with async_playwright() as p:
-        browser = None
-        try:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu"]
-            )
-        except Exception as e:
-            await add_log(f"Task {task_id} Browser launch error: {e}")
-            await update_task_status(task_id, "QUEUED")
-            return
-
-        target_loops = float('inf') if repeat_count <= 0 else repeat_count
-        attempts = 0
-
-        while current_repeat < target_loops:
-            active_proxy = custom_proxy if custom_proxy else random.choice(foreign_proxies)
-            device = random.choice(DEVICE_PROFILES)
-            
-            proxy_with_device = f"{active_proxy} ({device['name']})"
-            await update_task_status(task_id, "RUNNING", current_repeat, proxy_with_device)
-
-            loop_display = "Infinite" if repeat_count <= 0 else f"{current_repeat+1}/{repeat_count}"
-            await add_log(f"Task {task_id} (Loop {loop_display}) -> Device: [{device['name']}] | Proxy: {active_proxy}")
-
-            context = None
+    async with TASK_SEMAPHORE:
+        async with async_playwright() as p:
+            browser = None
             try:
-                context_options = {
-                    "user_agent": device["user_agent"],
-                    "viewport": device["viewport"]
-                }
-                if active_proxy and "Direct" not in active_proxy:
-                    context_options["proxy"] = {"server": active_proxy}
+                # Extra memory-saving flags added for Render Free Tier
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-gpu",
+                        "--single-process",
+                        "--disable-extensions",
+                        "--disable-accelerated-2d-canvas",
+                        "--no-zygote",
+                        "--disable-software-rasterizer"
+                    ]
+                )
+            except Exception as e:
+                await add_log(f"Task {task_id} Browser launch error: {e}")
+                await update_task_status(task_id, "QUEUED")
+                return
+
+            target_loops = float('inf') if repeat_count <= 0 else repeat_count
+            attempts = 0
+
+            while current_repeat < target_loops:
+                active_proxy = custom_proxy if custom_proxy else random.choice(foreign_proxies)
+                device = random.choice(DEVICE_PROFILES)
                 
-                context = await browser.new_context(**context_options)
-                page = await context.new_page()
-
-                await page.route("**/*.{png,jpg,jpeg,gif,svg,css,font,woff,woff2}", lambda route: route.abort())
-
-                try:
-                    await page.goto(url, timeout=15000, wait_until="domcontentloaded")
-                except Exception:
-                    await context.close()
-                    context = await browser.new_context(user_agent=device["user_agent"], viewport=device["viewport"])
-                    page = await context.new_page()
-                    proxy_with_device = f"Direct IP (Fallback) ({device['name']})"
-                    await update_task_status(task_id, "RUNNING", current_repeat, proxy_with_device)
-                    await page.goto(url, timeout=18000, wait_until="domcontentloaded")
-
-                try:
-                    await asyncio.sleep(1.5)
-                    skip_btn = page.locator(".ytp-ad-skip-button, button:has-text('Skip Ad')")
-                    if await skip_btn.count() > 0:
-                        await skip_btn.first.click(timeout=1500)
-                except:
-                    pass
-                
-                actual_duration = watch_seconds
-                if watch_seconds <= 0:
-                    try:
-                        dur = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.duration : 45; }")
-                        actual_duration = int(dur) if dur and dur > 0 else 45
-                    except:
-                        actual_duration = 45
-
-                elapsed = 0
-                while elapsed < actual_duration:
-                    await asyncio.sleep(1)
-                    elapsed += 1
-                    await update_task_progress(task_id, elapsed, actual_duration)
-
-                current_repeat += 1
+                proxy_with_device = f"{active_proxy} ({device['name']})"
                 await update_task_status(task_id, "RUNNING", current_repeat, proxy_with_device)
 
-            except Exception as loop_err:
-                await add_log(f"Task {task_id} error: {str(loop_err)}")
-                attempts += 1
-                if attempts >= max_retries:
-                    break
-            finally:
-                if context:
+                context = None
+                try:
+                    context_options = {
+                        "user_agent": device["user_agent"],
+                        "viewport": device["viewport"]
+                    }
+                    if active_proxy and "Direct" not in active_proxy:
+                        context_options["proxy"] = {"server": active_proxy}
+                    
+                    context = await browser.new_context(**context_options)
+                    page = await context.new_page()
+
+                    # Block heavy resources (images, fonts, stylesheets) to save massive RAM and bandwidth
+                    await page.route("**/*.{png,jpg,jpeg,gif,svg,css,font,woff,woff2}", lambda route: route.abort())
+
                     try:
+                        await page.goto(url, timeout=15000, wait_until="domcontentloaded")
+                    except Exception:
                         await context.close()
+                        context = await browser.new_context(user_agent=device["user_agent"], viewport=device["viewport"])
+                        page = await context.new_page()
+                        proxy_with_device = f"Direct IP (Fallback) ({device['name']})"
+                        await update_task_status(task_id, "RUNNING", current_repeat, proxy_with_device)
+                        await page.goto(url, timeout=18000, wait_until="domcontentloaded")
+
+                    try:
+                        await asyncio.sleep(1.5)
+                        skip_btn = page.locator(".ytp-ad-skip-button, button:has-text('Skip Ad')")
+                        if await skip_btn.count() > 0:
+                            await skip_btn.first.click(timeout=1500)
                     except:
                         pass
+                    
+                    actual_duration = watch_seconds
+                    if watch_seconds <= 0:
+                        try:
+                            dur = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.duration : 45; }")
+                            actual_duration = int(dur) if dur and dur > 0 else 45
+                        except:
+                            actual_duration = 45
 
-            if repeat_count > 0 and current_repeat >= repeat_count:
-                break
+                    elapsed = 0
+                    while elapsed < actual_duration:
+                        await asyncio.sleep(1)
+                        elapsed += 1
+                        await update_task_progress(task_id, elapsed, actual_duration)
 
-        if current_repeat > 0 and (repeat_count <= 0 or current_repeat >= repeat_count):
-            await update_task_status(task_id, "SUCCESS", current_repeat)
-            await add_log(f"Task {task_id}: Completed successfully!")
-        else:
-            await update_task_status(task_id, "FAILED")
+                    current_repeat += 1
+                    await update_task_status(task_id, "RUNNING", current_repeat, proxy_with_device)
 
-        if browser:
-            try:
-                await browser.close()
-            except:
-                pass
+                except Exception as loop_err:
+                    await add_log(f"Task {task_id} error: {str(loop_err)}")
+                    attempts += 1
+                    if attempts >= max_retries:
+                        break
+                finally:
+                    if context:
+                        try:
+                            await context.close()
+                        except:
+                            pass
+
+                if repeat_count > 0 and current_repeat >= repeat_count:
+                    break
+
+            if current_repeat > 0 and (repeat_count <= 0 or current_repeat >= repeat_count):
+                await update_task_status(task_id, "SUCCESS", current_repeat)
+                await add_log(f"Task {task_id}: Completed successfully!")
+            else:
+                await update_task_status(task_id, "FAILED")
+
+            if browser:
+                try:
+                    await browser.close()
+                except:
+                    pass
 
 async def start_workers():
     await init_db()
@@ -204,7 +212,7 @@ async def start_workers():
                     
                     asyncio.create_task(execute_single_task(task_id, url, proxy, watch_seconds, repeat_count, current_repeat, max_retries, foreign_proxies))
             
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)
         except Exception as e:
             await add_log(f"Manager loop error: {str(e)}")
             await asyncio.sleep(2)
