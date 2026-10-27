@@ -87,7 +87,7 @@ async def dashboard():
             <div class="top-bar">
                 <div>
                     <h1>Cloud Automation Dashboard</h1>
-                    <p style="margin: 5px 0 0 0; font-size: 13px; color: #666;">24/7 Cloud Execution | Real Proxy Rotation | Mobile Ready</p>
+                    <p style="margin: 5px 0 0 0; font-size: 13px; color: #666;">Multi-Tab Instant Multiplier | Real Proxy Rotation</p>
                 </div>
                 <button class="refresh-btn" onclick="window.location.reload();">🔄 Refresh Page</button>
             </div>
@@ -99,6 +99,10 @@ async def dashboard():
                         <input type="text" name="url" placeholder="https://youtu.be/..." required>
                     </div>
                     <div class="field-group">
+                        <label>📑 Number of Tabs / Instances (Kitne tabs ek sath khulne chahiye):</label>
+                        <input type="number" name="tab_count" value="1" min="1" max="100">
+                    </div>
+                    <div class="field-group">
                         <label>🌐 Custom Proxy (Optional):</label>
                         <input type="text" name="proxy" placeholder="http://ip:port">
                     </div>
@@ -106,12 +110,12 @@ async def dashboard():
                         <label>⏱️ Watch Duration (0 = Full Video):</label>
                         <input type="number" name="watch_seconds" value="0">
                     </div>
-                    <div class="field-group full-width">
+                    <div class="field-group">
                         <label>🔁 Repeat Count (0 = Infinite Loop):</label>
                         <input type="number" name="repeat_count" value="1">
                     </div>
                 </div>
-                <button type="submit">Add Task to Cloud Queue</button>
+                <button type="submit">Add Task(s) to Queue</button>
             </form>
 
             <h2>⚡ Live Active Tasks & Progress</h2>
@@ -133,9 +137,10 @@ async def dashboard():
     """
 
 @app.post("/add-task")
-async def create_task(url: str = Form(...), proxy: str = Form(None), watch_seconds: int = Form(0), repeat_count: int = Form(1)):
+async def create_task(url: str = Form(...), proxy: str = Form(None), watch_seconds: int = Form(0), repeat_count: int = Form(1), tab_count: int = Form(1)):
     clean_proxy = proxy.strip() if proxy and proxy.strip() else None
-    await add_task(url, clean_proxy, watch_seconds, repeat_count)
+    for _ in range(max(1, tab_count)):
+        await add_task(url, clean_proxy, watch_seconds, repeat_count)
     return HTMLResponse("<script>window.location='/';</script>")
 
 if __name__ == "__main__":
