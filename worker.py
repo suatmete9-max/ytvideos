@@ -22,9 +22,10 @@ PROXY_SOURCES = [
     "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt"
 ]
 
-async def verify_single_proxy(session, proxy):
+async def verify_clean_proxy(session, proxy):
     try:
-        async with session.get("https://www.google.com", proxy=proxy, timeout=3) as resp:
+        # Google ya YouTube par test karke check karenge ki proxy clean hai ya blacklisted/blocked
+        async with session.get("https://www.youtube.com", proxy=proxy, timeout=3) as resp:
             if resp.status == 200:
                 return proxy
     except:
@@ -49,21 +50,22 @@ async def fetch_and_verify_proxies():
     raw_proxies = list(set(raw_proxies))
     random.shuffle(raw_proxies)
     
-    working_proxies = []
+    # Strict filtering: Sirf non-blacklisted aur fully working clean proxies select hongi
+    clean_working_proxies = []
     async with aiohttp.ClientSession() as session:
-        tasks = [verify_single_proxy(session, p) for p in raw_proxies[:40]]
+        tasks = [verify_clean_proxy(session, p) for p in raw_proxies[:50]]
         results = await asyncio.gather(*tasks)
-        working_proxies = [r for r in results if r is not None]
+        clean_working_proxies = [r for r in results if r is not None]
 
-    if not working_proxies:
-        working_proxies = [
+    if not clean_working_proxies:
+        clean_working_proxies = [
             "http://20.205.61.155:80", 
             "http://185.199.229.156:7492", 
             "http://51.158.118.72:8811"
         ]
     
-    await add_log(f"[Proxy Engine] Verified & loaded {len(working_proxies)} active working foreign IPs.")
-    return working_proxies
+    await add_log(f"[Proxy Engine] Filtered & Loaded {len(clean_working_proxies)} Clean Non-Blacklisted IPs.")
+    return clean_working_proxies
 
 DEVICE_PROFILES = [
     {
@@ -104,7 +106,7 @@ async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_
             device = random.choice(DEVICE_PROFILES)
             
             loop_display = "Infinite" if repeat_count <= 0 else f"{current_repeat+1}/{repeat_count}"
-            await add_log(f"Task {task_id} (Loop {loop_display}) -> Device: [{device['name']}] | Proxy: {active_proxy}")
+            await add_log(f"Task {task_id} (Loop {loop_display}) -> Device: [{device['name']}] | Clean Proxy: {active_proxy}")
 
             context = None
             try:
@@ -118,7 +120,6 @@ async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_
                 context = await browser.new_context(**context_options)
                 page = await context.new_page()
 
-                # Unnecessary images, css, fonts block kiye taaki laptop bilkul fast chale
                 await page.route("**/*.{png,jpg,jpeg,gif,svg,css,font,woff,woff2}", lambda route: route.abort())
 
                 try:
@@ -130,7 +131,6 @@ async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_
                     active_proxy = "Direct IP (Smart Fallback)"
                     await page.goto(url, timeout=18000, wait_until="domcontentloaded")
 
-                # Ad Skipper
                 try:
                     await asyncio.sleep(1.5)
                     skip_btn = page.locator(".ytp-ad-skip-button, button:has-text('Skip Ad')")
@@ -147,7 +147,6 @@ async def execute_single_task(task_id, url, custom_proxy, watch_seconds, repeat_
                     except:
                         actual_duration = 45
 
-                # Clean background loop without taking screenshots
                 elapsed = 0
                 while elapsed < actual_duration:
                     await asyncio.sleep(1)
@@ -203,7 +202,7 @@ async def start_workers():
                     
                     asyncio.create_task(execute_single_task(task_id, url, proxy, watch_seconds, repeat_count, current_repeat, max_retries, foreign_proxies))
             
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
         except Exception as e:
             await add_log(f"Manager loop error: {str(e)}")
             await asyncio.sleep(2)
